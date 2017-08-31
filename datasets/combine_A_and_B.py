@@ -21,7 +21,7 @@ for sp in splits:
     img_fold_A = os.path.join(args.fold_A, sp)
     img_fold_B = os.path.join(args.fold_B, sp)
     img_list = os.listdir(img_fold_A)
-    if args.use_AB: 
+    if args.use_AB:
         img_list = [img_path for img_path in img_list if '_A.' in img_path]
 
     num_imgs = min(args.num_imgs, len(img_list))
@@ -43,7 +43,7 @@ for sp in splits:
             if args.use_AB:
                 name_AB = name_AB.replace('_A.', '.') # remove _A
             path_AB = os.path.join(img_fold_AB, name_AB)
-            im_A = cv2.imread(path_A, cv2.CV_LOAD_IMAGE_COLOR)
-            im_B = cv2.imread(path_B, cv2.CV_LOAD_IMAGE_COLOR)
+            im_A = cv2.imread(path_A, cv2.IMREAD_COLOR)
+            im_B = cv2.imread(path_B, cv2.IMREAD_COLOR)
             im_AB = np.concatenate([im_A, im_B], 1)
             cv2.imwrite(path_AB, im_AB)

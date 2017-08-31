@@ -15,7 +15,7 @@ visualizer = Visualizer(opt)
 
 total_steps = 0
 
-for epoch in range(1, opt.niter + opt.niter_decay + 1):
+for epoch in range(0, opt.niter + opt.niter_decay):
     epoch_start_time = time.time()
     for i, data in enumerate(dataset):
         iter_start_time = time.time()
