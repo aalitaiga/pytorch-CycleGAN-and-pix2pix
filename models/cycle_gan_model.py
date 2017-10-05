@@ -1,15 +1,16 @@
-import numpy as np
-import torch
-import os
 from collections import OrderedDict
-from torch.autograd import Variable
 import itertools
+import numpy as np
+import os
+import torch
+import sys
+
+from torch.autograd import Variable
+
 import util.util as util
 from util.image_pool import ImagePool
 from .base_model import BaseModel
 from . import networks
-import sys
-
 
 class CycleGANModel(BaseModel):
     def name(self):
@@ -23,14 +24,19 @@ class CycleGANModel(BaseModel):
         self.input_A = self.Tensor(nb, opt.input_nc, size, size)
         self.input_B = self.Tensor(nb, opt.output_nc, size, size)
 
+        if self.opt.add_state:
+            # TODO: don't hardocde the dimension of state
+            self.input_A_joints = self.Tensor(nb, 11)
+            self.input_B_joints = self.Tensor(nb, 11)
+
         # load/define networks
         # The naming conversion is different from those used in the paper
         # Code (paper): G_A (G), G_B (F), D_A (D_Y), D_B (D_X)
 
-        self.netG_A = networks.define_G(opt.input_nc, opt.output_nc,
-                                        opt.ngf, opt.which_model_netG, opt.norm, not opt.no_dropout, self.gpu_ids)
-        self.netG_B = networks.define_G(opt.output_nc, opt.input_nc,
-                                        opt.ngf, opt.which_model_netG, opt.norm, not opt.no_dropout, self.gpu_ids)
+        self.netG_A = networks.define_G(opt.input_nc, opt.output_nc, opt.ngf,
+                                        opt.which_model_netG, opt.norm, not opt.no_dropout, self.gpu_ids, opt.add_state)
+        self.netG_B = networks.define_G(opt.output_nc, opt.input_nc, opt.ngf,
+                                        opt.which_model_netG, opt.norm, not opt.no_dropout, self.gpu_ids, opt.add_state)
 
         if self.isTrain:
             use_sigmoid = opt.no_lsgan
@@ -78,29 +84,42 @@ class CycleGANModel(BaseModel):
         self.input_B.resize_(input_B.size()).copy_(input_B)
         self.image_paths = input['A_paths' if AtoB else 'B_paths']
 
+        if self.opt.add_state:
+            input_A_joints = input['A_joints' if AtoB else 'B_joints']
+            input_B_joints = input['B_joints' if AtoB else 'A_joints']
+            self.input_A_joints.resize_(input_A_joints.size()).copy_(input_A_joints)
+            self.input_B_joints.resize_(input_B_joints.size()).copy_(input_B_joints)
+
     def forward(self):
         self.real_A = Variable(self.input_A)
         self.real_B = Variable(self.input_B)
 
+        if self.opt.add_state:
+            self.real_A_joints = Variable(self.input_A_joints)
+            self.real_B_joints = Variable(self.input_B_joints)
+
     def test(self):
         self.real_A = Variable(self.input_A, volatile=True)
-        self.fake_B = self.netG_A.forward(self.real_A)
-        self.rec_A = self.netG_B.forward(self.fake_B)
+        self.real_A_joints = Variable(self.input_A_joints, volatile=True)
+        self.real_B_joints = Variable(self.input_B_joints, volatile=True)
+
+        self.fake_B = self.netG_A.forward(self.real_A, self.real_A_joints)
+        self.rec_A = self.netG_B.forward(self.fake_B, self.real_B_joints)
 
         self.real_B = Variable(self.input_B, volatile=True)
-        self.fake_A = self.netG_B.forward(self.real_B)
-        self.rec_B = self.netG_A.forward(self.fake_A)
+        self.fake_A = self.netG_B.forward(self.real_B, self.real_B_joints)
+        self.rec_B = self.netG_A.forward(self.fake_A, self.real_A_joints)
 
     # get image paths
     def get_image_paths(self):
         return self.image_paths
 
-    def backward_D_basic(self, netD, real, fake):
+    def backward_D_basic(self, netD, real, fake, joints):
         # Real
-        pred_real = netD.forward(real)
+        pred_real = netD.forward(real, joints)
         loss_D_real = self.criterionGAN(pred_real, True)
         # Fake
-        pred_fake = netD.forward(fake.detach())
+        pred_fake = netD.forward(fake.detach(), joints.detach())
         loss_D_fake = self.criterionGAN(pred_fake, False)
         # Combined loss
         loss_D = (loss_D_real + loss_D_fake) * 0.5
@@ -109,12 +128,12 @@ class CycleGANModel(BaseModel):
         return loss_D
 
     def backward_D_A(self):
-        fake_B = self.fake_B_pool.query(self.fake_B)
-        self.loss_D_A = self.backward_D_basic(self.netD_A, self.real_B, fake_B)
+        fake_B, fake_B_joints = self.fake_B_pool.query(self.fake_B, self.real_B_joints)
+        self.loss_D_A = self.backward_D_basic(self.netD_A, self.real_B, fake_B, fake_B_joints)
 
     def backward_D_B(self):
-        fake_A = self.fake_A_pool.query(self.fake_A)
-        self.loss_D_B = self.backward_D_basic(self.netD_B, self.real_A, fake_A)
+        fake_A, fake_A_joints = self.fake_A_pool.query(self.fake_A, self.real_A_joints)
+        self.loss_D_B = self.backward_D_basic(self.netD_B, self.real_A, fake_A, fake_A_joints)
 
     def backward_G(self):
         lambda_idt = self.opt.identity
@@ -123,10 +142,10 @@ class CycleGANModel(BaseModel):
         # Identity loss
         if lambda_idt > 0:
             # G_A should be identity if real_B is fed.
-            self.idt_A = self.netG_A.forward(self.real_B)
+            self.idt_A = self.netG_A.forward(self.real_B, self.real_B_joints)
             self.loss_idt_A = self.criterionIdt(self.idt_A, self.real_B) * lambda_B * lambda_idt
             # G_B should be identity if real_A is fed.
-            self.idt_B = self.netG_B.forward(self.real_A)
+            self.idt_B = self.netG_B.forward(self.real_A, self.real_A_joints)
             self.loss_idt_B = self.criterionIdt(self.idt_B, self.real_A) * lambda_A * lambda_idt
         else:
             self.loss_idt_A = 0
@@ -134,18 +153,18 @@ class CycleGANModel(BaseModel):
 
         # GAN loss
         # D_A(G_A(A))
-        self.fake_B = self.netG_A.forward(self.real_A)
-        pred_fake = self.netD_A.forward(self.fake_B)
+        self.fake_B = self.netG_A.forward(self.real_A, self.real_A_joints)
+        pred_fake = self.netD_A.forward(self.fake_B, self.real_B_joints)
         self.loss_G_A = self.criterionGAN(pred_fake, True)
         # D_B(G_B(B))
-        self.fake_A = self.netG_B.forward(self.real_B)
-        pred_fake = self.netD_B.forward(self.fake_A)
+        self.fake_A = self.netG_B.forward(self.real_B, self.real_B_joints)
+        pred_fake = self.netD_B.forward(self.fake_A, self.real_A_joints)
         self.loss_G_B = self.criterionGAN(pred_fake, True)
         # Forward cycle loss
-        self.rec_A = self.netG_B.forward(self.fake_B)
+        self.rec_A = self.netG_B.forward(self.fake_B, self.real_B_joints)
         self.loss_cycle_A = self.criterionCycle(self.rec_A, self.real_A) * lambda_A
         # Backward cycle loss
-        self.rec_B = self.netG_A.forward(self.fake_A)
+        self.rec_B = self.netG_A.forward(self.fake_A, self.real_A_joints)
         self.loss_cycle_B = self.criterionCycle(self.rec_B, self.real_B) * lambda_B
         # combined loss
         self.loss_G = self.loss_G_A + self.loss_G_B + self.loss_cycle_A + self.loss_cycle_B + self.loss_idt_A + self.loss_idt_B
