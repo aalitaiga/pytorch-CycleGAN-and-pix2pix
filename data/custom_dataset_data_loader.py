@@ -9,7 +9,8 @@ def CreateDataset(opt):
         dataset = AlignedDataset()
     elif opt.dataset_mode == 'unaligned':
         from data.unaligned_dataset import UnalignedDataset, FuelUnalignedDataset
-        dataset = UnalignedDataset() if not opt.add_state else FuelUnalignedDataset()
+        # dataset = UnalignedDataset() if not opt.add_state else FuelUnalignedDataset()
+        dataset = FuelUnalignedDataset()
     elif opt.dataset_mode == 'single':
         from data.single_dataset import SingleDataset
         dataset = SingleDataset()

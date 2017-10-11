@@ -78,11 +78,12 @@ def get_norm_layer(norm_type='instance'):
         norm_layer = functools.partial(nn.BatchNorm2d, affine=True)
     elif norm_type == 'instance':
         norm_layer = functools.partial(nn.InstanceNorm2d, affine=False)
-    elif layer_type == 'none':
+    elif norm_type == 'none':
         norm_layer = None
     else:
         raise NotImplementedError('normalization layer [%s] is not found' % norm_type)
     return norm_layer
+
 
 def get_scheduler(optimizer, opt):
     if opt.lr_policy == 'lambda':
@@ -99,7 +100,7 @@ def get_scheduler(optimizer, opt):
     return scheduler
 
 
-def define_G(input_nc, output_nc, ngf, which_model_netG, norm='batch', use_dropout=False, init_type='normal', gpu_ids=[], add_joints=False):
+def define_G(input_nc, output_nc, ngf, which_model_netG, norm='batch', use_dropout=False, init_type='normal', gpu_ids=[]):
     netG = None
     use_gpu = len(gpu_ids) > 0
     norm_layer = get_norm_layer(norm_type=norm)
@@ -108,11 +109,11 @@ def define_G(input_nc, output_nc, ngf, which_model_netG, norm='batch', use_dropo
         assert(torch.cuda.is_available())
 
     if which_model_netG == 'resnet_9blocks':
-        netG = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9, gpu_ids=gpu_ids, add_joints=add_joints)
+        netG = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=9, gpu_ids=gpu_ids)
     elif which_model_netG == 'resnet_6blocks':
-        netG = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=6, gpu_ids=gpu_ids, add_joints=add_joints)
+        netG = ResnetGenerator(input_nc, output_nc, ngf, norm_layer=norm_layer, use_dropout=use_dropout, n_blocks=6, gpu_ids=gpu_ids)
     elif which_model_netG == 'unet_128':
-        netG = UnetGenerator(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout, gpu_ids=gpu_ids, add_joints=add_joints)
+        netG = UnetGenerator(input_nc, output_nc, 7, ngf, norm_layer=norm_layer, use_dropout=use_dropout, gpu_ids=gpu_ids)
     elif which_model_netG == 'unet_256':
         netG = UnetGenerator(input_nc, output_nc, 8, ngf, norm_layer=norm_layer, use_dropout=use_dropout, gpu_ids=gpu_ids)
     else:
@@ -203,8 +204,7 @@ class GANLoss(nn.Module):
 # Code and idea originally from Justin Johnson's architecture.
 # https://github.com/jcjohnson/fast-neural-style/
 class ResnetGenerator(nn.Module):
-    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False,
-        n_blocks=6, gpu_ids=[], padding_type='reflect', add_joints=False):
+    def __init__(self, input_nc, output_nc, ngf=64, norm_layer=nn.BatchNorm2d, use_dropout=False, n_blocks=6, gpu_ids=[], padding_type='reflect'):
         assert(n_blocks >= 0)
         super(ResnetGenerator, self).__init__()
         self.input_nc = input_nc
@@ -216,14 +216,12 @@ class ResnetGenerator(nn.Module):
         else:
             use_bias = norm_layer == nn.InstanceNorm2d
 
-        self.linear = nn.Linear(11, 128*128)
-        self.conv = nn.Sequential(*[nn.ReflectionPad2d(3),
-                 nn.Conv2d(input_nc, ngf-1, kernel_size=7, padding=0,
+        model = [nn.ReflectionPad2d(3),
+                 nn.Conv2d(input_nc, ngf, kernel_size=7, padding=0,
                            bias=use_bias),
-                 norm_layer(ngf-1),
-                 nn.ReLU(True)])
+                 norm_layer(ngf),
+                 nn.ReLU(True)]
 
-        model = []
         n_downsampling = 2
         for i in range(n_downsampling):
             mult = 2**i
@@ -250,15 +248,12 @@ class ResnetGenerator(nn.Module):
 
         self.model = nn.Sequential(*model)
 
-    def forward(self, input, joints=None):
-        if self.gpu_ids and isinstance(input.data, torch.cuda.FloatTensor) and False:
+    def forward(self, input):
+        if self.gpu_ids and isinstance(input.data, torch.cuda.FloatTensor):
             return nn.parallel.data_parallel(self.model, input, self.gpu_ids)
         else:
-            joints_features = self.linear(joints).view(-1, 1, 128, 128)
-            conv_features = self.conv(input)
-            # import ipdb; ipdb.set_trace()
-            return self.model(torch.cat([conv_features, joints_features], dim=1))
-            # return self.model(x)
+            return self.model(input)
+
 
 # Define a resnet block
 class ResnetBlock(nn.Module):
@@ -309,7 +304,7 @@ class ResnetBlock(nn.Module):
 # at the bottleneck
 class UnetGenerator(nn.Module):
     def __init__(self, input_nc, output_nc, num_downs, ngf=64,
-                 norm_layer=nn.BatchNorm2d, use_dropout=False, gpu_ids=[], add_joints=False):
+                 norm_layer=nn.BatchNorm2d, use_dropout=False, gpu_ids=[]):
         super(UnetGenerator, self).__init__()
         self.gpu_ids = gpu_ids
 
@@ -320,15 +315,15 @@ class UnetGenerator(nn.Module):
         unet_block = UnetSkipConnectionBlock(ngf * 4, ngf * 8, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
         unet_block = UnetSkipConnectionBlock(ngf * 2, ngf * 4, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
         unet_block = UnetSkipConnectionBlock(ngf, ngf * 2, input_nc=None, submodule=unet_block, norm_layer=norm_layer)
-        unet_block = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer, add_joints=add_joints)
+        unet_block = UnetSkipConnectionBlock(output_nc, ngf, input_nc=input_nc, submodule=unet_block, outermost=True, norm_layer=norm_layer)
 
         self.model = unet_block
 
-    def forward(self, *input):
-        if self.gpu_ids and isinstance(input[0].data, torch.cuda.FloatTensor) and False:
+    def forward(self, input):
+        if self.gpu_ids and isinstance(input.data, torch.cuda.FloatTensor) and False:
             return nn.parallel.data_parallel(self.model, input, self.gpu_ids)
         else:
-            return self.model(*input)
+            return self.model(input)
 
 
 # Defines the submodule with skip connection.
@@ -336,7 +331,7 @@ class UnetGenerator(nn.Module):
 #   |-- downsampling -- |submodule| -- upsampling --|
 class UnetSkipConnectionBlock(nn.Module):
     def __init__(self, outer_nc, inner_nc, input_nc=None,
-                 submodule=None, outermost=False, innermost=False, norm_layer=nn.BatchNorm2d, use_dropout=False, add_joints=False):
+                 submodule=None, outermost=False, innermost=False, norm_layer=nn.BatchNorm2d, use_dropout=False):
         super(UnetSkipConnectionBlock, self).__init__()
         self.outermost = outermost
         if type(norm_layer) == functools.partial:
@@ -356,18 +351,12 @@ class UnetSkipConnectionBlock(nn.Module):
             upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc,
                                         kernel_size=4, stride=2,
                                         padding=1)
-
             down = [downconv]
-            up = [uprelu, upconv, nn.Tanh()]
-            model = down + [submodule] + up
-
-            if add_joints:
-                downconv = nn.Conv2d(outer_nc, inner_nc-1, kernel_size=4,
-                                     stride=2, padding=1, bias=use_bias)
-                fc_joints = nn.Linear(11, 64*64)
-                self.fc_joints = fc_joints
-                self.downconv = downconv
-                model = [submodule] + up
+            up = [upconv, nn.Tanh()]
+            model = down + [submodule] + [uprelu]
+            self.up = nn.Sequential(*up)
+            self.conv = nn.Sequential(nn.Conv2d(128, 8, kernel_size=4, stride=4, padding=1, bias=use_bias), nn.ReLU(True))
+            self.linear = nn.Linear(8*16*16, 2)
         elif innermost:
             upconv = nn.ConvTranspose2d(inner_nc, outer_nc,
                                         kernel_size=4, stride=2,
@@ -389,14 +378,12 @@ class UnetSkipConnectionBlock(nn.Module):
 
         self.model = nn.Sequential(*model)
 
-    def forward(self, x, joints=None):
-        if self.outermost and joints is not None:
-            joints_features = self.fc_joints(joints).view(-1, 1, 64, 64)
-            conv_map = self.downconv(x)
-            # import ipdb; ipdb.set_trace()
-            return self.model(torch.cat([conv_map, joints_features], dim=1))
-        elif self.outermost:
-            return self.model(x)
+    def forward(self, x):
+        if self.outermost:
+            out = self.model(x)
+            image = self.up(out)
+            joint = self.linear(self.conv(out).view(-1, 16*16*8))
+            return image, joint
         else:
             return torch.cat([x, self.model(x)], 1)
 
@@ -411,15 +398,12 @@ class NLayerDiscriminator(nn.Module):
         else:
             use_bias = norm_layer == nn.InstanceNorm2d
 
-        self.linear = nn.Linear(11, 65*65)
         kw = 4
         padw = 1
-        self.seq = nn.Sequential(*[
-            nn.Conv2d(input_nc, ndf-1, kernel_size=kw, stride=2, padding=padw),
+        sequence = [
+            nn.Conv2d(input_nc, ndf, kernel_size=kw, stride=2, padding=padw),
             nn.LeakyReLU(0.2, True)
-        ])
-
-        sequence = []
+        ]
 
         nf_mult = 1
         nf_mult_prev = 1
@@ -449,10 +433,8 @@ class NLayerDiscriminator(nn.Module):
 
         self.model = nn.Sequential(*sequence)
 
-    def forward(self, input, joints):
-        if len(self.gpu_ids) and isinstance(input.data, torch.cuda.FloatTensor) and False:
+    def forward(self, input):
+        if len(self.gpu_ids) and isinstance(input.data, torch.cuda.FloatTensor):
             return nn.parallel.data_parallel(self.model, input, self.gpu_ids)
         else:
-            first_conv = self.seq(input)
-            joints_features = self.linear(joints).view(-1, 1, 65, 65)
-            return self.model(torch.cat([first_conv, joints_features], dim=1))
+            return self.model(input)

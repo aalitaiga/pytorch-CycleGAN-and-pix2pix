@@ -90,7 +90,6 @@ class FuelUnalignedDataset(BaseDataset):
         A_img, B_img = A_data[1][0, idx_A[1], :, :, :], B_data[3][0, idx_B[1], :, :, :]
         A_img, B_img = Image.fromarray(A_img), Image.fromarray(B_img)
         A_img, B_img = self.transform(A_img), self.transform(B_img)
-
         d = {
             'A': A_img,
             'B': B_img,
@@ -100,6 +99,11 @@ class FuelUnalignedDataset(BaseDataset):
 
         if self.opt.add_state:
             A_joints, B_joints = A_data[8][0, idx_A[1], :], B_data[4][0, idx_B[1], :]
+            A_joints, B_joints = torch.from_numpy(A_joints).float(), torch.from_numpy(A_joints).float()
+            d.update({'A_joints': A_joints, 'B_joints': B_joints})
+
+        if self.opt.add_ball:
+            A_joints, B_joints = A_data[8][0, idx_A[1], 4:6], B_data[4][0, idx_B[1], 4:6]
             A_joints, B_joints = torch.from_numpy(A_joints).float(), torch.from_numpy(A_joints).float()
             d.update({'A_joints': A_joints, 'B_joints': B_joints})
         self.f.close(handle)
