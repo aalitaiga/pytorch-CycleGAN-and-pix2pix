@@ -329,6 +329,64 @@ class UnetGenerator(nn.Module):
 # Defines the submodule with skip connection.
 # X -------------------identity---------------------- X
 #   |-- downsampling -- |submodule| -- upsampling --|
+# class UnetSkipConnectionBlock(nn.Module):
+#     def __init__(self, outer_nc, inner_nc, input_nc=None,
+#                  submodule=None, outermost=False, innermost=False, norm_layer=nn.BatchNorm2d, use_dropout=False):
+#         super(UnetSkipConnectionBlock, self).__init__()
+#         self.outermost = outermost
+#         if type(norm_layer) == functools.partial:
+#             use_bias = norm_layer.func == nn.InstanceNorm2d
+#         else:
+#             use_bias = norm_layer == nn.InstanceNorm2d
+#         if input_nc is None:
+#             input_nc = outer_nc
+#         downconv = nn.Conv2d(input_nc, inner_nc, kernel_size=4,
+#                              stride=2, padding=1, bias=use_bias)
+#         downrelu = nn.LeakyReLU(0.2, True)
+#         downnorm = norm_layer(inner_nc)
+#         uprelu = nn.ReLU(True)
+#         upnorm = norm_layer(outer_nc)
+#
+#         if outermost:
+#             upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc,
+#                                         kernel_size=4, stride=2,
+#                                         padding=1)
+#             down = [downconv]
+#             up = [upconv, nn.Tanh()]
+#             model = down + [submodule] + [uprelu]
+#             self.up = nn.Sequential(*up)
+#             self.conv = nn.Sequential(nn.Conv2d(128, 8, kernel_size=4, stride=4, padding=1, bias=use_bias), nn.ReLU(True))
+#             self.linear = nn.Linear(8*16*16, 2)
+#         elif innermost:
+#             upconv = nn.ConvTranspose2d(inner_nc, outer_nc,
+#                                         kernel_size=4, stride=2,
+#                                         padding=1, bias=use_bias)
+#             down = [downrelu, downconv]
+#             up = [uprelu, upconv, upnorm]
+#             model = down + up
+#         else:
+#             upconv = nn.ConvTranspose2d(inner_nc * 2, outer_nc,
+#                                         kernel_size=4, stride=2,
+#                                         padding=1, bias=use_bias)
+#             down = [downrelu, downconv, downnorm]
+#             up = [uprelu, upconv, upnorm]
+#
+#             if use_dropout:
+#                 model = down + [submodule] + up + [nn.Dropout(0.5)]
+#             else:
+#                 model = down + [submodule] + up
+#
+#         self.model = nn.Sequential(*model)
+#
+#     def forward(self, x):
+#         if self.outermost:
+#             out = self.model(x)
+#             image = self.up(out)
+#             joint = self.linear(self.conv(out).view(-1, 16*16*8))
+#             return image, joint
+#         else:
+#             return torch.cat([x, self.model(x)], 1)
+
 class UnetSkipConnectionBlock(nn.Module):
     def __init__(self, outer_nc, inner_nc, input_nc=None,
                  submodule=None, outermost=False, innermost=False, norm_layer=nn.BatchNorm2d, use_dropout=False):
@@ -352,11 +410,8 @@ class UnetSkipConnectionBlock(nn.Module):
                                         kernel_size=4, stride=2,
                                         padding=1)
             down = [downconv]
-            up = [upconv, nn.Tanh()]
-            model = down + [submodule] + [uprelu]
-            self.up = nn.Sequential(*up)
-            self.conv = nn.Sequential(nn.Conv2d(128, 8, kernel_size=4, stride=4, padding=1, bias=use_bias), nn.ReLU(True))
-            self.linear = nn.Linear(8*16*16, 2)
+            up = [uprelu, upconv, nn.Tanh()]
+            model = down + [submodule] + up
         elif innermost:
             upconv = nn.ConvTranspose2d(inner_nc, outer_nc,
                                         kernel_size=4, stride=2,
@@ -380,17 +435,13 @@ class UnetSkipConnectionBlock(nn.Module):
 
     def forward(self, x):
         if self.outermost:
-            out = self.model(x)
-            image = self.up(out)
-            joint = self.linear(self.conv(out).view(-1, 16*16*8))
-            return image, joint
+            return self.model(x)
         else:
             return torch.cat([x, self.model(x)], 1)
 
-
 # Defines the PatchGAN discriminator with the specified arguments.
 class NLayerDiscriminator(nn.Module):
-    def __init__(self, input_nc, ndf=64, n_layers=3, norm_layer=nn.BatchNorm2d, use_sigmoid=False, gpu_ids=[]):
+    def __init__(self, input_nc, ndf=64, n_layers=4, norm_layer=nn.BatchNorm2d, use_sigmoid=False, gpu_ids=[]):
         super(NLayerDiscriminator, self).__init__()
         self.gpu_ids = gpu_ids
         if type(norm_layer) == functools.partial:
@@ -426,15 +477,20 @@ class NLayerDiscriminator(nn.Module):
             nn.LeakyReLU(0.2, True)
         ]
 
-        sequence += [nn.Conv2d(ndf * nf_mult, 1, kernel_size=kw, stride=1, padding=padw)]
+        sequence += [nn.Conv2d(ndf * nf_mult, 3, kernel_size=kw, stride=1, padding=padw)]
 
         if use_sigmoid:
             sequence += [nn.Sigmoid()]
 
+        self.linear = nn.Sequential(*[nn.LeakyReLU(0.2, False), nn.Linear(2*14*14, 2), nn.Tanh()])
         self.model = nn.Sequential(*sequence)
 
     def forward(self, input):
-        if len(self.gpu_ids) and isinstance(input.data, torch.cuda.FloatTensor):
+        if len(self.gpu_ids) and isinstance(input.data, torch.cuda.FloatTensor) and False:
             return nn.parallel.data_parallel(self.model, input, self.gpu_ids)
         else:
-            return self.model(input)
+            output = self.model(input)
+            decision = output[:,0]
+            ball = output[:,1:].contiguous()
+            ball_pred = self.linear(ball.view(-1, 2*14*14))
+            return decision, ball_pred

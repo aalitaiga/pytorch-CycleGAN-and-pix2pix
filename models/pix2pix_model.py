@@ -4,7 +4,7 @@ import os
 from collections import OrderedDict
 from torch.autograd import Variable
 import util.util as util
-from util.image_pool import ImagePool
+from util.image_pool import ImagePoolOld as ImagePool
 from .base_model import BaseModel
 from . import networks
 
@@ -87,12 +87,12 @@ class Pix2PixModel(BaseModel):
         # Fake
         # stop backprop to the generator by detaching fake_B
         fake_AB = self.fake_AB_pool.query(torch.cat((self.real_A, self.fake_B), 1))
-        self.pred_fake = self.netD.forward(fake_AB.detach())
+        self.pred_fake, _ = self.netD.forward(fake_AB.detach())
         self.loss_D_fake = self.criterionGAN(self.pred_fake, False)
 
         # Real
         real_AB = torch.cat((self.real_A, self.real_B), 1)
-        self.pred_real = self.netD.forward(real_AB)
+        self.pred_real, _ = self.netD.forward(real_AB)
         self.loss_D_real = self.criterionGAN(self.pred_real, True)
 
         # Combined loss
@@ -103,7 +103,7 @@ class Pix2PixModel(BaseModel):
     def backward_G(self):
         # First, G(A) should fake the discriminator
         fake_AB = torch.cat((self.real_A, self.fake_B), 1)
-        pred_fake = self.netD.forward(fake_AB)
+        pred_fake, _ = self.netD.forward(fake_AB)
         self.loss_G_GAN = self.criterionGAN(pred_fake, True)
 
         # Second, G(A) = B
