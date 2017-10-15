@@ -97,15 +97,16 @@ class FuelUnalignedDataset(BaseDataset):
             'B_paths': 0
         }
 
-        if self.opt.add_state:
-            A_joints, B_joints = A_data[8][0, idx_A[1], :], B_data[4][0, idx_B[1], :]
-            A_joints, B_joints = torch.from_numpy(A_joints).float(), torch.from_numpy(A_joints).float()
-            d.update({'A_joints': A_joints, 'B_joints': B_joints})
-
         if self.opt.add_ball:
             A_joints, B_joints = A_data[8][0, idx_A[1], 4:6], B_data[4][0, idx_B[1], 4:6]
             A_joints, B_joints = torch.from_numpy(A_joints).float(), torch.from_numpy(A_joints).float()
             d.update({'A_joints': A_joints, 'B_joints': B_joints})
+
+        elif self.opt.add_state:
+            A_joints, B_joints = A_data[8][0, idx_A[1], :], B_data[4][0, idx_B[1], :]
+            A_joints, B_joints = torch.from_numpy(A_joints).float(), torch.from_numpy(A_joints).float()
+            d.update({'A_joints': A_joints, 'B_joints': B_joints})
+
         self.f.close(handle)
 
         return d

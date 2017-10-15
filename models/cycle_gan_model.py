@@ -25,7 +25,7 @@ class CycleGANModel(BaseModel):
 
         if self.opt.add_ball:
             # TODO: don't hardocde the dimension of state
-            self.ball = self.Tensor(nb, 2)
+            self.input_ball = self.Tensor(nb, 2)
 
         # load/define networks
         # The naming conversion is different from those used in the paper
@@ -92,14 +92,14 @@ class CycleGANModel(BaseModel):
 
         if self.opt.add_ball:
             ball = input['A_joints' if AtoB else 'B_joints']
-            self.ball.resize_(ball.size()).copy_(ball)
+            self.input_ball.resize_(ball.size()).copy_(ball)
 
     def forward(self):
         self.real_A = Variable(self.input_A)
         self.real_B = Variable(self.input_B)
 
         if self.opt.add_ball:
-            self.real_ball = Variable(self.ball)
+            self.real_ball = Variable(self.input_ball)
 
     def test(self):
         self.real_A = Variable(self.input_A, volatile=True)
@@ -118,23 +118,25 @@ class CycleGANModel(BaseModel):
         lambda_ball = self.opt.lambda_ball
         # Real
         pred_real, ball_predicted = netD.forward(real)
-        loss_D_real = self.criterionGAN(pred_real, True) + lambda_ball  * self.criterionBall(ball_predicted, ball_real)
+        loss_ball_real = lambda_ball * self.criterionBall(ball_predicted, ball_real)
+        loss_D_real = self.criterionGAN(pred_real, True)
         # Fake
         pred_fake, ball_predicted = netD.forward(fake.detach())
-        loss_D_fake = self.criterionGAN(pred_fake, False) + lambda_ball * self.criterionBall(ball_predicted, ball_real)
+        loss_ball_fake = lambda_ball * self.criterionBall(ball_predicted, ball_real)
+        loss_D_fake = self.criterionGAN(pred_fake, False)
         # Combined loss
-        loss_D = (loss_D_real + loss_D_fake) * 0.5
+        loss_D = (loss_D_real + loss_D_fake + loss_ball_real + loss_ball_fake) * 0.5
         # backward
         loss_D.backward()
-        return loss_D
+        return (loss_D_real + loss_D_fake) * 0.5, (loss_ball_fake + loss_ball_real) * 0.5
 
     def backward_D_A(self):
         fake_B, real_ball = self.fake_B_pool.query(self.fake_B, self.real_ball)
-        self.loss_D_A = self.backward_D_basic(self.netD_A, self.real_B, fake_B, real_ball)
+        self.loss_D_A, self.loss_ball_A = self.backward_D_basic(self.netD_A, self.real_B, fake_B, real_ball)
 
     def backward_D_B(self):
         fake_A, real_ball = self.fake_A_pool.query(self.fake_A, self.real_ball)
-        self.loss_D_B = self.backward_D_basic(self.netD_B, self.real_A, fake_A, real_ball)
+        self.loss_D_B, self.loss_ball_B = self.backward_D_basic(self.netD_B, self.real_A, fake_A, real_ball)
 
     def backward_G(self):
         lambda_idt = self.opt.identity
@@ -195,16 +197,17 @@ class CycleGANModel(BaseModel):
         D_B = self.loss_D_B.data[0]
         G_B = self.loss_G_B.data[0]
         Cyc_B = self.loss_cycle_B.data[0]
-        # B_A = self.loss_ball_G_A.data[0]
-        # B_B = self.loss_ball_G_B.data[0]
+        B_A = self.loss_ball_A.data[0]
+        B_B = self.loss_ball_B.data[0]
         if self.opt.identity > 0.0:
             idt_A = self.loss_idt_A.data[0]
             idt_B = self.loss_idt_B.data[0]
             return OrderedDict([('D_A', D_A), ('G_A', G_A), ('Cyc_A', Cyc_A), ('idt_A', idt_A),
-                                ('D_B', D_B), ('G_B', G_B), ('Cyc_B', Cyc_B), ('idt_B', idt_B)])
+                                ('D_B', D_B), ('G_B', G_B), ('Cyc_B', Cyc_B), ('idt_B', idt_B),
+                                 ('B_A', B_A), ('B_B', B_B)])
         else:
             return OrderedDict([('D_A', D_A), ('G_A', G_A), ('Cyc_A', Cyc_A),
-                                ('D_B', D_B), ('G_B', G_B), ('Cyc_B', Cyc_B), # ('B_A', B_A), ('B_B', B_B)
+                                ('D_B', D_B), ('G_B', G_B), ('Cyc_B', Cyc_B), ('B_A', B_A), ('B_B', B_B)
                                 ])
 
     def get_current_visuals(self):
